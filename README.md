@@ -354,8 +354,9 @@ and all access is filtered by RLS.
   | 7   | `20261020_personal_expenses_notifications_leave_guard.sql` | `personal_expenses`, `notifications`, notification triggers/helpers, `group_member_net_balance`, and the leave-with-balance guard                                                                                           |
   | 8   | `20261021_appearance_account_security.sql`                 | `user_preferences.theme_mode` and the account-deletion policy functions                                                                                                                                                     |
   | 9   | `20261022_restore_missing_profiles.sql`                    | Idempotent repair: restores missing `profiles` rows and re-asserts the signup trigger                                                                                                                                       |
+  | 10  | `20261023_hand_over_group_creator_on_leave.sql`            | Hands `groups.created_by` to a remaining owner/member when someone leaves or is removed, so departed groups stop appearing and cannot be deleted by a non-member                                                              |
 
-   Migrations #1–#9 are additive; several are explicitly idempotent and safe to
+   Migrations #1–#10 are additive; several are explicitly idempotent and safe to
    re-run. If a feature's RPC or table is missing at runtime, the corresponding
    migration has not been applied yet.
 5. **Configure email confirmation** for development — see the next section.

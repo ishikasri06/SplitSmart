@@ -978,6 +978,8 @@ function CloudMembersModal({ group, authUserId, loadMembers, onClose, onChanged,
   const [linkUrl, setLinkUrl] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkError, setLinkError] = useState("");
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -997,8 +999,10 @@ function CloudMembersModal({ group, authUserId, loadMembers, onClose, onChanged,
     void loadAll();
   }, [loadAll]);
 
-  const myRole = members.find((member) => member.id === authUserId)?.role || "member";
+  const selfMember = members.find((member) => member.id === authUserId);
+  const myRole = selfMember?.role || "member";
   const ownerCount = members.filter((member) => member.role === "owner").length;
+  const isLastOwner = selfMember?.role === "owner" && ownerCount <= 1;
   const canInvite = canManageInvitations(myRole);
   const canRole = canChangeRoles(myRole);
 
@@ -1148,30 +1152,59 @@ function CloudMembersModal({ group, authUserId, loadMembers, onClose, onChanged,
     }
   }
 
-  async function handleRemove(member) {
-    const isSelf = member.id === authUserId;
+  function openLeave() {
+    setLeaveError("");
+    setLeaveOpen(true);
+  }
 
+  async function confirmLeave() {
+    if (isLastOwner) {
+      setLeaveError("Transfer ownership to another member before leaving. A group must always keep an owner.");
+      return;
+    }
+
+    setBusy(true);
+    setLeaveError("");
+
+    try {
+      const net = await getGroupMemberBalance(group.id, authUserId);
+
+      if (hasOutstandingBalance(net)) {
+        setLeaveError(outstandingBalanceMessage(net, { self: true, name: selfMember?.name }));
+        return;
+      }
+
+      await removeGroupMember(group.id, authUserId);
+
+      notify?.("You left the group");
+      setLeaveOpen(false);
+      await onChanged?.();
+      onClose?.();
+    } catch (error) {
+      setLeaveError(error.message || "Could not leave the group.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove(member) {
     setBusy(true);
 
     try {
       const net = await getGroupMemberBalance(group.id, member.id);
 
       if (hasOutstandingBalance(net)) {
-        notify?.(outstandingBalanceMessage(net, { self: isSelf, name: member.name }));
+        notify?.(outstandingBalanceMessage(net, { self: false, name: member.name }));
         return;
       }
 
-      const prompt = isSelf
-        ? "Leave this group?"
-        : `Remove ${member.name} from this group?`;
-
-      if (!window.confirm(prompt)) return;
+      if (!window.confirm(`Remove ${member.name} from this group? They will lose access, but the group, its expenses and its history stay with the remaining members.`)) return;
 
       await removeGroupMember(group.id, member.id);
       await loadAll();
       await loadInviteList();
       onChanged?.();
-      notify?.(isSelf ? "You left the group" : "Member removed");
+      notify?.("Member removed");
     } catch (removeError) {
       notify?.(removeError.message || "Could not remove the member");
     } finally {
@@ -1196,8 +1229,29 @@ function CloudMembersModal({ group, authUserId, loadMembers, onClose, onChanged,
   }
 
   return (
-    <Modal title="Cloud group members" subtitle={`${group.name} · manage people and invitations`} onClose={onClose} wide>
-      {loading ? (
+    <Modal
+      title={leaveOpen ? "Leave this group?" : "Cloud group members"}
+      subtitle={leaveOpen ? `${group.name} · confirm before you lose access` : `${group.name} · manage people and invitations`}
+      onClose={leaveOpen ? () => setLeaveOpen(false) : onClose}
+      wide
+    >
+      {leaveOpen ? (
+        <div className="form-stack">
+          <div className="notice">
+            <LogOut size={16}/> You will lose access to {group.name} and it will disappear from your Groups list and group switcher. The group itself — its members, expenses, settlements and history — stays with the remaining members.
+          </div>
+          {isLastOwner && (
+            <p className="form-error" role="alert">You are the last owner of this group. Transfer ownership to another member before leaving — a group must always keep an owner.</p>
+          )}
+          {leaveError && <p className="form-error" role="alert">{leaveError}</p>}
+          <div className="form-actions">
+            <Button type="button" onClick={() => setLeaveOpen(false)} disabled={busy}>Cancel</Button>
+            <Button type="button" variant="danger" onClick={confirmLeave} disabled={busy || isLastOwner}>
+              <LogOut size={15}/> {busy ? "Leaving…" : "Leave group"}
+            </Button>
+          </div>
+        </div>
+      ) : loading ? (
         <Empty title="Loading members" detail="Fetching the secure group directory."/>
       ) : error ? (
         <Empty title="Could not load members" detail={error}/>
@@ -1225,19 +1279,36 @@ function CloudMembersModal({ group, authUserId, loadMembers, onClose, onChanged,
                     <option value="owner">owner</option>
                   </select>
                 ) : null}
-                {canRemoveMember({ requesterRole: myRole, targetRole: member.role, ownerCount, requesterId: authUserId, targetId: member.id }) ? (
-                  <button
-                    className="icon-btn danger"
-                    title={member.id === authUserId ? "Leave group" : `Remove ${member.name}`}
+                {member.id === authUserId ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    onClick={openLeave}
+                    disabled={busy || isLastOwner}
+                    title={isLastOwner ? "Transfer ownership to another member before leaving" : "Leave this group"}
+                  >
+                    <LogOut size={15}/> Leave group
+                  </Button>
+                ) : canRemoveMember({ requesterRole: myRole, targetRole: member.role, ownerCount, requesterId: authUserId, targetId: member.id }) ? (
+                  <Button
+                    type="button"
+                    variant="danger"
                     onClick={() => handleRemove(member)}
                     disabled={busy}
+                    title={`Remove ${member.name} from this group`}
                   >
-                    <Trash2 size={15}/>
-                  </button>
+                    <Trash2 size={15}/> Remove
+                  </Button>
                 ) : null}
               </div>
             ))}
           </div>
+
+          {isLastOwner && (
+            <div className="notice">
+              <ShieldAlert size={16}/> You are the last owner of this group. Transfer ownership to another member before leaving — a group must always keep an owner.
+            </div>
+          )}
 
           {canInvite ? (
             <div className="add-members-form">
